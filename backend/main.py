@@ -49,9 +49,16 @@ PROVIDERS = [
 app = FastAPI()
 
 # (simple) autorise le front en dev
+DEV_FRONTEND_ORIGINS = [
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:5174",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=DEV_FRONTEND_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -59,6 +66,20 @@ app.add_middleware(
 
 class CheckRequest(BaseModel):
     input: str
+
+DEFAULT_ANALYSIS_PROMPT = """Analyze this news claim or article for credibility. Provide a structured analysis in JSON format with these fields:
+- credibilityScore (0-100)
+- verdict (\"Likely True\", \"Partially True\", \"Unclear\", \"Likely False\", \"False\")
+- redFlags (array of concerning elements)
+- positiveSignals (array of credible elements)
+- recommendations (array of verification steps)
+- summary (brief explanation)
+
+News to analyze: {text}
+
+Respond ONLY with valid JSON, no preamble or markdown.
+"""
+
 
 def extract_json_from_raw(raw: str):
     raw = raw.replace("```json", "").replace("```", "").strip()
@@ -71,9 +92,15 @@ def extract_json_from_raw(raw: str):
         ) from exc
 
 
-async def call_openai_compatible(client: httpx.AsyncClient, provider: dict, prompt: str):
+async def call_openai_compatible(
+    client: httpx.AsyncClient,
+    provider: dict,
+    prompt: str,
+    *,
+    model: str | None = None,
+):
     payload = {
-        "model": provider["model"],
+        "model": model or provider["model"],
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": 800,
         "response_format": {"type": "json_object"},
@@ -91,12 +118,21 @@ async def call_openai_compatible(client: httpx.AsyncClient, provider: dict, prom
     return extract_json_from_raw(raw)
 
 
-async def call_anthropic(client: httpx.AsyncClient, provider: dict, prompt: str):
+async def call_anthropic(
+    client: httpx.AsyncClient,
+    provider: dict,
+    prompt: str,
+    *,
+    model: str | None = None,
+    tools: list[dict] | None = None,
+):
     payload = {
-        "model": provider["model"],
+        "model": model or provider["model"],
         "max_tokens": 800,
         "messages": [{"role": "user", "content": prompt}],
     }
+    if tools:
+        payload["tools"] = tools
     headers = {
         "x-api-key": provider["api_key"],
         "anthropic-version": "2023-06-01",
@@ -112,12 +148,63 @@ async def call_anthropic(client: httpx.AsyncClient, provider: dict, prompt: str)
     return extract_json_from_raw(raw)
 
 
-async def call_provider(client: httpx.AsyncClient, provider: dict, prompt: str):
+async def call_provider(
+    client: httpx.AsyncClient,
+    provider: dict,
+    prompt: str,
+    *,
+    model: str | None = None,
+    tools: list[dict] | None = None,
+):
     if provider["kind"] == "openai":
-        return await call_openai_compatible(client, provider, prompt)
+        return await call_openai_compatible(client, provider, prompt, model=model)
     if provider["kind"] == "anthropic":
-        return await call_anthropic(client, provider, prompt)
+        return await call_anthropic(client, provider, prompt, model=model, tools=tools)
     raise RuntimeError(f"Unsupported provider kind: {provider['kind']}")
+
+
+def validate_input(text: str) -> str:
+    cleaned = (text or "").strip()
+    if not cleaned:
+        raise HTTPException(status_code=400, detail="Empty input")
+    return cleaned
+
+
+def get_enabled_providers(*, names: list[str] | None = None) -> list[dict]:
+    enabled = [provider for provider in PROVIDERS if provider["api_key"]]
+    if names:
+        allowed_names = set(names)
+        enabled = [provider for provider in enabled if provider["name"] in allowed_names]
+    if not enabled:
+        raise RuntimeError("Missing provider API key in backend/.env")
+    return enabled
+
+
+async def analyze_with_providers(
+    *,
+    prompt: str,
+    providers: list[dict],
+    model_overrides: dict[str, str] | None = None,
+    tool_overrides: dict[str, list[dict]] | None = None,
+):
+    errors = []
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        for provider in providers:
+            try:
+                parsed = await call_provider(
+                    client,
+                    provider,
+                    prompt,
+                    model=(model_overrides or {}).get(provider["name"]),
+                    tools=(tool_overrides or {}).get(provider["name"]),
+                )
+                parsed["provider"] = provider["name"]
+                return parsed
+            except Exception as exc:
+                errors.append({"provider": provider["name"], "error": str(exc)})
+
+    raise HTTPException(status_code=502, detail={"error": "All providers failed", "providers": errors})
 
 
 @app.get("/health")
@@ -125,38 +212,10 @@ def health():
     available = [provider["name"] for provider in PROVIDERS if provider["api_key"]]
     return {"ok": True, "providers": available, "default": "deepseek"}
 
+
 @app.post("/api/check")
 async def check(req: CheckRequest):
-    text = (req.input or "").strip()
-    if not text:
-        raise HTTPException(status_code=400, detail="Empty input")
-
-    prompt = f"""Analyze this news claim or article for credibility. Provide a structured analysis in JSON format with these fields:
-- credibilityScore (0-100)
-- verdict ("Likely True", "Partially True", "Unclear", "Likely False", "False")
-- redFlags (array of concerning elements)
-- positiveSignals (array of credible elements)
-- recommendations (array of verification steps)
-- summary (brief explanation)
-
-News to analyze: {text}
-
-Respond ONLY with valid JSON, no preamble or markdown.
-"""
-
-    enabled_providers = [provider for provider in PROVIDERS if provider["api_key"]]
-    if not enabled_providers:
-        raise RuntimeError("Missing provider API key in backend/.env")
-
-    errors = []
-
-    async with httpx.AsyncClient(timeout=60) as client:
-        for provider in enabled_providers:
-            try:
-                parsed = await call_provider(client, provider, prompt)
-                parsed["provider"] = provider["name"]
-                return parsed
-            except Exception as exc:
-                errors.append({"provider": provider["name"], "error": str(exc)})
-
-    raise HTTPException(status_code=502, detail={"error": "All providers failed", "providers": errors})
+    text = validate_input(req.input)
+    prompt = DEFAULT_ANALYSIS_PROMPT.format(text=text)
+    providers = get_enabled_providers()
+    return await analyze_with_providers(prompt=prompt, providers=providers)
