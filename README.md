@@ -1,16 +1,90 @@
-# React + Vite
+# Fake News Checker
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+AI-assisted credibility analysis for news claims, headlines, and article URLs.
 
-Currently, two official plugins are available:
+The public app uses a bring-your-own-key (BYOK) model. Each visitor selects a provider and enters their own API key. The key is kept in browser memory, sent over HTTPS for the analysis request, and is not stored by this application.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+## Supported providers
 
-## React Compiler
+- DeepSeek
+- Mistral
+- Anthropic
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Requirements
 
-## Expanding the ESLint configuration
+- Node.js 18+
+- Python 3.10+
+- An API key for one of the supported providers
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+## Local development
+
+Install frontend dependencies:
+
+```bash
+npm install
+```
+
+Create the backend virtual environment and install Python dependencies:
+
+```bash
+python -m venv backend/.venv
+backend/.venv/Scripts/python.exe -m pip install -r backend/requirements.txt
+```
+
+Start the frontend and backend together:
+
+```bash
+npm run dev
+```
+
+The frontend runs at `http://localhost:5173` and the API runs at `http://localhost:8000`.
+
+The frontend defaults to `http://localhost:8000` for the API. To use another API URL, set `VITE_API_BASE_URL` before building or running the frontend.
+
+## Production deployment
+
+Deploy the frontend and FastAPI backend as public HTTPS services. The frontend must point to the backend using:
+
+```text
+VITE_API_BASE_URL=https://your-api.example.com
+```
+
+Configure the backend with the deployed frontend origin:
+
+```text
+FRONTEND_ORIGINS=https://your-app.example.com
+```
+
+Multiple origins may be separated by commas. The backend does not require provider API keys for the BYOK flow.
+
+Run the API in production with:
+
+```bash
+python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
+```
+
+Build the frontend with:
+
+```bash
+npm run build
+```
+
+Serve the generated `dist` directory with a static hosting provider.
+
+## Security notes
+
+- Never commit `.env` files or API keys.
+- API keys are accepted only per request and are not written to a database or local storage.
+- Use HTTPS in production.
+- Set `FRONTEND_ORIGINS` to the exact frontend origin instead of allowing arbitrary origins.
+- Add provider-side spending limits and rotate a key immediately if it is exposed.
+
+## Available scripts
+
+| Command | Purpose |
+| --- | --- |
+| `npm run dev` | Start the Vite frontend and FastAPI backend |
+| `npm run dev:frontend` | Start only the frontend |
+| `npm run dev:backend` | Start only the backend |
+| `npm run build` | Build the production frontend |
+| `npm run lint` | Run ESLint |

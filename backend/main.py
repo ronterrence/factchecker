@@ -1,45 +1,25 @@
 import os
 import json
-from pathlib import Path
-from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import httpx
-
-# charge le .env situé EXACTEMENT dans le même dossier que ce fichier
-load_dotenv(dotenv_path=Path(__file__).with_name(".env"))
-
-
-def get_env_var(name: str, *, required: bool = False) -> str | None:
-    value = os.getenv(name)
-    if required and not value:
-        raise RuntimeError(f"Missing {name} in backend/.env")
-    return value
-
-
-ANTHROPIC_API_KEY = get_env_var("ANTHROPIC_API_KEY")
-MISTRAL_API_KEY = get_env_var("MISTRAL_API_KEY")
-DEEPSEEK_API_KEY = get_env_var("DEEPSEEK_API_KEY")
 
 PROVIDERS = [
     {
         "name": "deepseek",
-        "api_key": DEEPSEEK_API_KEY,
         "kind": "openai",
         "url": "https://api.deepseek.com/chat/completions",
         "model": "deepseek-chat",
     },
     {
         "name": "mistral",
-        "api_key": MISTRAL_API_KEY,
         "kind": "openai",
         "url": "https://api.mistral.ai/v1/chat/completions",
         "model": "mistral-small-latest",
     },
     {
         "name": "anthropic",
-        "api_key": ANTHROPIC_API_KEY,
         "kind": "anthropic",
         "url": "https://api.anthropic.com/v1/messages",
         "model": "claude-sonnet-4-5",
@@ -48,13 +28,17 @@ PROVIDERS = [
 
 app = FastAPI()
 
-# (simple) autorise le front en dev
 DEV_FRONTEND_ORIGINS = [
     "http://localhost:5173",
     "http://localhost:5174",
     "http://127.0.0.1:5173",
     "http://127.0.0.1:5174",
 ]
+configured_origins = os.getenv("FRONTEND_ORIGINS")
+if configured_origins:
+    DEV_FRONTEND_ORIGINS.extend(
+        origin.strip() for origin in configured_origins.split(",") if origin.strip()
+    )
 
 app.add_middleware(
     CORSMiddleware,
@@ -65,7 +49,9 @@ app.add_middleware(
 )
 
 class CheckRequest(BaseModel):
-    input: str
+    input: str = Field(min_length=1, max_length=20_000)
+    provider: str = Field(min_length=1, max_length=32)
+    api_key: str = Field(min_length=1, max_length=512)
 
 DEFAULT_ANALYSIS_PROMPT = """Analyze this news claim or article for credibility. Provide a structured analysis in JSON format with these fields:
 - credibilityScore (0-100)
@@ -96,6 +82,7 @@ async def call_openai_compatible(
     client: httpx.AsyncClient,
     provider: dict,
     prompt: str,
+    api_key: str,
     *,
     model: str | None = None,
 ):
@@ -106,7 +93,7 @@ async def call_openai_compatible(
         "response_format": {"type": "json_object"},
     }
     headers = {
-        "Authorization": f"Bearer {provider['api_key']}",
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
     response = await client.post(provider["url"], headers=headers, json=payload)
@@ -122,6 +109,7 @@ async def call_anthropic(
     client: httpx.AsyncClient,
     provider: dict,
     prompt: str,
+    api_key: str,
     *,
     model: str | None = None,
     tools: list[dict] | None = None,
@@ -134,7 +122,7 @@ async def call_anthropic(
     if tools:
         payload["tools"] = tools
     headers = {
-        "x-api-key": provider["api_key"],
+        "x-api-key": api_key,
         "anthropic-version": "2023-06-01",
         "content-type": "application/json",
     }
@@ -152,14 +140,15 @@ async def call_provider(
     client: httpx.AsyncClient,
     provider: dict,
     prompt: str,
+    api_key: str,
     *,
     model: str | None = None,
     tools: list[dict] | None = None,
 ):
     if provider["kind"] == "openai":
-        return await call_openai_compatible(client, provider, prompt, model=model)
+        return await call_openai_compatible(client, provider, prompt, api_key, model=model)
     if provider["kind"] == "anthropic":
-        return await call_anthropic(client, provider, prompt, model=model, tools=tools)
+        return await call_anthropic(client, provider, prompt, api_key, model=model, tools=tools)
     raise RuntimeError(f"Unsupported provider kind: {provider['kind']}")
 
 
@@ -170,20 +159,18 @@ def validate_input(text: str) -> str:
     return cleaned
 
 
-def get_enabled_providers(*, names: list[str] | None = None) -> list[dict]:
-    enabled = [provider for provider in PROVIDERS if provider["api_key"]]
-    if names:
-        allowed_names = set(names)
-        enabled = [provider for provider in enabled if provider["name"] in allowed_names]
-    if not enabled:
-        raise RuntimeError("Missing provider API key in backend/.env")
-    return enabled
+def get_provider(name: str) -> dict:
+    for provider in PROVIDERS:
+        if provider["name"] == name:
+            return provider
+    raise HTTPException(status_code=400, detail="Unsupported provider")
 
 
 async def analyze_with_providers(
     *,
     prompt: str,
     providers: list[dict],
+    api_key: str,
     model_overrides: dict[str, str] | None = None,
     tool_overrides: dict[str, list[dict]] | None = None,
 ):
@@ -196,6 +183,7 @@ async def analyze_with_providers(
                     client,
                     provider,
                     prompt,
+                    api_key,
                     model=(model_overrides or {}).get(provider["name"]),
                     tools=(tool_overrides or {}).get(provider["name"]),
                 )
@@ -209,13 +197,16 @@ async def analyze_with_providers(
 
 @app.get("/health")
 def health():
-    available = [provider["name"] for provider in PROVIDERS if provider["api_key"]]
-    return {"ok": True, "providers": available, "default": "deepseek"}
+    return {"ok": True, "providers": [provider["name"] for provider in PROVIDERS]}
 
 
 @app.post("/api/check")
 async def check(req: CheckRequest):
     text = validate_input(req.input)
     prompt = DEFAULT_ANALYSIS_PROMPT.format(text=text)
-    providers = get_enabled_providers()
-    return await analyze_with_providers(prompt=prompt, providers=providers)
+    provider = get_provider(req.provider)
+    return await analyze_with_providers(
+        prompt=prompt,
+        providers=[provider],
+        api_key=req.api_key,
+    )

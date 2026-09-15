@@ -161,6 +161,24 @@ select {
   z-index: 1;
 }
 
+.provider-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+  gap: 1rem;
+  margin-bottom: 0.25rem;
+}
+
+.provider-select,
+.api-key-input {
+  width: 100%;
+  min-height: 3rem;
+  margin-top: 0.45rem;
+}
+
+.provider-select {
+  cursor: pointer;
+}
+
 .input-label {
   display: block;
   margin-bottom: 0.75rem;
@@ -203,6 +221,12 @@ select {
   border-color: rgba(59, 130, 246, 0.95);
   box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.12), inset 0 1px 2px rgba(15, 23, 42, 0.04);
   transform: translateY(-1px);
+}
+
+@media (max-width: 640px) {
+  .provider-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .cta-row {

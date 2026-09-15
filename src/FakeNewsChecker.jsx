@@ -135,11 +135,13 @@ function TipsCard() {
 
 export default function FakeNewsChecker() {
   const [input, setInput] = useState("");
+  const [provider, setProvider] = useState("deepseek");
+  const [apiKey, setApiKey] = useState("");
   const [analysis, setAnalysis] = useState(null);
   const [loading, setLoading] = useState(false);
 
   const checkNews = async () => {
-    if (!input.trim()) return;
+    if (!input.trim() || !apiKey.trim()) return;
 
     setLoading(true);
 
@@ -149,7 +151,7 @@ export default function FakeNewsChecker() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ input }),
+        body: JSON.stringify({ input, provider, api_key: apiKey }),
       });
 
       if (!response.ok) {
@@ -188,6 +190,40 @@ export default function FakeNewsChecker() {
         {/* Input Section */}
         <section className="surface-card input-panel mb-8 p-6 md:p-7">
           <div className="panel-content">
+            <div className="provider-grid">
+              <div>
+                <label className="input-label" htmlFor="provider">
+                  AI provider
+                </label>
+                <select
+                  id="provider"
+                  value={provider}
+                  onChange={(event) => setProvider(event.target.value)}
+                  className="textarea-polished provider-select"
+                >
+                  <option value="deepseek">DeepSeek</option>
+                  <option value="mistral">Mistral</option>
+                  <option value="anthropic">Anthropic</option>
+                </select>
+              </div>
+              <div>
+                <label className="input-label" htmlFor="api-key">
+                  Your API key
+                </label>
+                <input
+                  id="api-key"
+                  type="password"
+                  value={apiKey}
+                  onChange={(event) => setApiKey(event.target.value)}
+                  placeholder="Used for this request only"
+                  autoComplete="off"
+                  className="textarea-polished api-key-input"
+                />
+              </div>
+            </div>
+            <p className="input-help">
+              Your key is sent over HTTPS for the selected analysis and is not stored by this app.
+            </p>
             <label className="input-label">
               Enter a news claim, headline, or paste article URL
             </label>
@@ -201,7 +237,7 @@ export default function FakeNewsChecker() {
             <div className="cta-row">
               <button
                 onClick={checkNews}
-                disabled={loading || !input.trim()}
+                disabled={loading || !input.trim() || !apiKey.trim()}
                 className="primary-button"
               >
                 {loading ? (
