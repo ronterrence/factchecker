@@ -71,6 +71,22 @@ npm run build
 
 Serve the generated `dist` directory with a static hosting provider.
 
+### Render
+
+This repository includes `render.yaml` for a Render Blueprint with two services:
+
+1. `factchecker-api`: FastAPI web service
+2. `factchecker`: Vite static site
+
+To deploy:
+
+1. Push the repository to GitHub.
+2. In Render, choose **New > Blueprint** and select this repository.
+3. Set `FRONTEND_ORIGINS` on `factchecker-api` to the exact URL Render gives the `factchecker` static site, for example `https://factchecker.onrender.com`.
+4. Deploy both services.
+
+The API service does not need a provider API key because visitors supply their own key in the app. Render's free web service may sleep when idle, so the first request after inactivity can take longer.
+
 ## Security notes
 
 - Never commit `.env` files or API keys.
