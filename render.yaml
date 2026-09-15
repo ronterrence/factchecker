@@ -10,10 +10,11 @@ services:
       - key: FRONTEND_ORIGINS
         sync: false
 
-  - type: static
+  - type: web
     name: factchecker
+    runtime: static
     buildCommand: npm ci && npm run build
-    publishPath: dist
+    staticPublishPath: ./dist
     envVars:
       - key: VITE_API_BASE_URL
         value: https://factchecker-api.onrender.com
